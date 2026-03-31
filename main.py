@@ -1,16 +1,27 @@
 import os
 import asyncio
+import logging
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from pyrogram.errors import UserNotParticipant
+from pyrogram.errors import UserNotParticipant, BadMsgNotification, FloodWait
 from dotenv import load_dotenv
 import sqlite3
 from datetime import datetime, timedelta
 from config import API_ID, API_HASH, BOT_TOKEN, ADMIN_ID, CHANNEL_ID
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 load_dotenv()
 
-app = Client("kodlikino_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+app = Client(
+    "kodlikino_bot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN,
+    sleep_threshold=30,
+    no_updates=False
+)
 
 conn = sqlite3.connect("bot.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -179,66 +190,98 @@ async def handle_text(client, message: Message):
 
 @app.on_callback_query()
 async def handle_callback(client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    data = callback_query.data
-    
-    if not is_admin(user_id) and data != "send_request" and data != "check_request":
-        has_request = await check_join_request(user_id)
-        if not has_request:
-            await callback_query.answer("❌ Avval kanalga zayavka yuboringiz!", show_alert=True)
-            return
-    
-    if data == "send_request":
-        cursor.execute("UPDATE users SET has_join_request = 1 WHERE user_id = ?", (user_id,))
-        conn.commit()
+    try:
+        user_id = callback_query.from_user.id
+        data = callback_query.data
         
-        await callback_query.answer("📨 Zayavka yuborildi! Kanalga qo'shilish so'rovi amalga oshadi",
-                                   show_alert=True)
-        await callback_query.message.edit_text("📨 **Zayavka yuborildi!**\n\n"
-                                               "Kanalga qo'shilish so'rovingiz kutilmoqda.\n\n"
-                                               "Tekshirish tugmasini bosing →",
-                                               reply_markup=get_request_keyboard())
-    
-    elif data == "check_request":
-        has_request = await check_join_request(user_id)
+        if not is_admin(user_id) and data != "send_request" and data != "check_request":
+            has_request = await check_join_request(user_id)
+            if not has_request:
+                try:
+                    await callback_query.answer("❌ Avval kanalga zayavka yuboringiz!", show_alert=True)
+                except:
+                    pass
+                return
         
-        if has_request:
-            await callback_query.message.delete()
-            await client.send_message(user_id, "✅ **Xush kelibsiz!**\n\n"
-                                             "Endi botdan to'liq foydalanishingiz mumkin",
-                                             reply_markup=get_main_keyboard())
-            await callback_query.answer("✅ Siz kanalga qo'shildingiz!", show_alert=True)
-        else:
-            await callback_query.answer("⏳ Hali kanalga qo'shilmadingiz. Kutib turing...", show_alert=True)
-    
-    elif data == "search":
-        await callback_query.message.edit_text("🔍 Film kodini yuboring:")
-    
-    elif data == "admin_stats":
-        cursor.execute("SELECT COUNT(*) FROM users")
-        user_count = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM films")
-        film_count = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM users WHERE has_join_request = 1")
-        request_count = cursor.fetchone()[0]
+        if data == "send_request":
+            cursor.execute("UPDATE users SET has_join_request = 1 WHERE user_id = ?", (user_id,))
+            conn.commit()
+            
+            try:
+                await callback_query.answer("📨 Zayavka yuborildi!", show_alert=True)
+            except:
+                pass
+            
+            try:
+                await callback_query.message.edit_text("📨 **Zayavka yuborildi!**\n\nTekshirish tugmasini bosing →",
+                                                       reply_markup=get_request_keyboard())
+            except:
+                pass
         
-        msg = f"📊 **Statistika**\n\n"
-        msg += f"👥 Foydalanuvchilar: {user_count}\n"
-        msg += f"📨 Zayavka: {request_count}\n"
-        msg += f"🎬 Filmlar: {film_count}"
+        elif data == "check_request":
+            has_request = await check_join_request(user_id)
+            
+            if has_request:
+                try:
+                    await callback_query.message.delete()
+                except:
+                    pass
+                await client.send_message(user_id, "✅ **Xush kelibsiz!**\n\n"
+                                                 "Endi botdan to'liq foydalanishingiz mumkin",
+                                                 reply_markup=get_main_keyboard())
+                try:
+                    await callback_query.answer("✅ Siz kanalga qo'shildingiz!", show_alert=True)
+                except:
+                    pass
+            else:
+                try:
+                    await callback_query.answer("⏳ Hali kanalga qo'shilmadingiz...", show_alert=True)
+                except:
+                    pass
         
-        await callback_query.message.edit_text(msg, reply_markup=get_admin_keyboard())
+        elif data == "search":
+            try:
+                await callback_query.message.edit_text("🔍 Film kodini yuboring:")
+            except:
+                pass
+        
+        elif data == "admin_stats":
+            cursor.execute("SELECT COUNT(*) FROM users")
+            user_count = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM films")
+            film_count = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM users WHERE has_join_request = 1")
+            request_count = cursor.fetchone()[0]
+            
+            msg = f"📊 **Statistika**\n\n"
+            msg += f"👥 Foydalanuvchilar: {user_count}\n"
+            msg += f"📨 Zayavka: {request_count}\n"
+            msg += f"🎬 Filmlar: {film_count}"
+            
+            try:
+                await callback_query.message.edit_text(msg, reply_markup=get_admin_keyboard())
+            except:
+                pass
+        
+        elif data == "admin_add_film":
+            try:
+                await callback_query.message.edit_text("🎬 Film kodini yuboring (format: kod|Film Nomi):")
+            except:
+                pass
+        
+        elif data == "admin_show_films":
+            msg = "🎬 **Filmlar:**\n\n"
+            if movies:
+                for code, film in movies.items():
+                    msg += f"📝 `{code}` - {film['name']}\n"
+            else:
+                msg += "❌ Film yo'q"
+            try:
+                await callback_query.message.edit_text(msg, reply_markup=get_admin_keyboard())
+            except:
+                pass
     
-    elif data == "admin_add_film":
-        await callback_query.message.edit_text("🎬 Film kodini yuboring (format: kod|Film Nomi):")
-    
-    elif data == "admin_show_films":
-        msg = "🎬 **Filmlar:**\n\n"
-        if movies:
-            for code, film in movies.items():
-                msg += f"📝 `{code}` - {film['name']}\n"
-        else:
-            msg += "❌ Film yo'q"
-        await callback_query.message.edit_text(msg, reply_markup=get_admin_keyboard())
+    except Exception as e:
+        logger.error(f"Callback error: {e}")
 
 app.run()
