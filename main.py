@@ -9,6 +9,7 @@ import sqlite3
 from datetime import datetime, timedelta
 from config import API_ID, API_HASH, BOT_TOKEN, ADMIN_ID, CHANNEL_ID
 
+# Logging sozlamasi
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,8 @@ app = Client(
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
-    sleep_threshold=30,
+    sleep_threshold=10,
+    workers=4,
     no_updates=False
 )
 
@@ -199,8 +201,8 @@ async def handle_callback(client, callback_query: CallbackQuery):
             if not has_request:
                 try:
                     await callback_query.answer("❌ Avval kanalga zayavka yuboringiz!", show_alert=True)
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Answer error: {e}")
                 return
         
         if data == "send_request":
@@ -208,15 +210,16 @@ async def handle_callback(client, callback_query: CallbackQuery):
             conn.commit()
             
             try:
-                await callback_query.answer("📨 Zayavka yuborildi!", show_alert=True)
-            except:
-                pass
+                await callback_query.answer("📨 Zayavka yuborildi!", show_alert=False)
+            except Exception as e:
+                logger.warning(f"Answer error: {e}")
             
             try:
+                await asyncio.sleep(0.5)
                 await callback_query.message.edit_text("📨 **Zayavka yuborildi!**\n\nTekshirish tugmasini bosing →",
                                                        reply_markup=get_request_keyboard())
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Edit error: {e}")
         
         elif data == "check_request":
             has_request = await check_join_request(user_id)
@@ -224,64 +227,78 @@ async def handle_callback(client, callback_query: CallbackQuery):
             if has_request:
                 try:
                     await callback_query.message.delete()
-                except:
-                    pass
-                await client.send_message(user_id, "✅ **Xush kelibsiz!**\n\n"
-                                                 "Endi botdan to'liq foydalanishingiz mumkin",
-                                                 reply_markup=get_main_keyboard())
+                except Exception as e:
+                    logger.warning(f"Delete error: {e}")
+                
                 try:
-                    await callback_query.answer("✅ Siz kanalga qo'shildingiz!", show_alert=True)
-                except:
-                    pass
+                    await asyncio.sleep(0.5)
+                    await client.send_message(user_id, "✅ **Xush kelibsiz!**\n\n"
+                                                     "Endi botdan to'liq foydalanishingiz mumkin",
+                                                     reply_markup=get_main_keyboard())
+                except Exception as e:
+                    logger.warning(f"Send message error: {e}")
+                
+                try:
+                    await callback_query.answer("✅ Siz kanalga qo'shildingiz!", show_alert=False)
+                except Exception as e:
+                    logger.warning(f"Answer error: {e}")
             else:
                 try:
-                    await callback_query.answer("⏳ Hali kanalga qo'shilmadingiz...", show_alert=True)
-                except:
-                    pass
+                    await callback_query.answer("⏳ Hali kanalga qo'shilmadingiz...", show_alert=False)
+                except Exception as e:
+                    logger.warning(f"Answer error: {e}")
         
         elif data == "search":
             try:
                 await callback_query.message.edit_text("🔍 Film kodini yuboring:")
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Edit error: {e}")
         
         elif data == "admin_stats":
-            cursor.execute("SELECT COUNT(*) FROM users")
-            user_count = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM films")
-            film_count = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM users WHERE has_join_request = 1")
-            request_count = cursor.fetchone()[0]
-            
-            msg = f"📊 **Statistika**\n\n"
-            msg += f"👥 Foydalanuvchilar: {user_count}\n"
-            msg += f"📨 Zayavka: {request_count}\n"
-            msg += f"🎬 Filmlar: {film_count}"
-            
             try:
+                cursor.execute("SELECT COUNT(*) FROM users")
+                user_count = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(*) FROM films")
+                film_count = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(*) FROM users WHERE has_join_request = 1")
+                request_count = cursor.fetchone()[0]
+                
+                msg = f"📊 **Statistika**\n\n"
+                msg += f"👥 Foydalanuvchilar: {user_count}\n"
+                msg += f"📨 Zayavka: {request_count}\n"
+                msg += f"🎬 Filmlar: {film_count}"
+                
                 await callback_query.message.edit_text(msg, reply_markup=get_admin_keyboard())
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Stats error: {e}")
         
         elif data == "admin_add_film":
             try:
                 await callback_query.message.edit_text("🎬 Film kodini yuboring (format: kod|Film Nomi):")
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Edit error: {e}")
         
         elif data == "admin_show_films":
-            msg = "🎬 **Filmlar:**\n\n"
-            if movies:
-                for code, film in movies.items():
-                    msg += f"📝 `{code}` - {film['name']}\n"
-            else:
-                msg += "❌ Film yo'q"
             try:
+                msg = "🎬 **Filmlar:**\n\n"
+                if movies:
+                    for code, film in movies.items():
+                        msg += f"📝 `{code}` - {film['name']}\n"
+                else:
+                    msg += "❌ Film yo'q"
                 await callback_query.message.edit_text(msg, reply_markup=get_admin_keyboard())
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Films error: {e}")
     
     except Exception as e:
-        logger.error(f"Callback error: {e}")
+        logger.error(f"Callback critical error: {e}")
 
-app.run()
+if __name__ == "__main__":
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        print("Bot to'xtatildi")
+        conn.close()
+    except Exception as e:
+        logger.error(f"Bot xatosi: {e}")
+        conn.close()
