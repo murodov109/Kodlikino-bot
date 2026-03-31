@@ -2,17 +2,13 @@ import os
 import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from pyrogram.errors import UserNotParticipant, FloodWait
+from pyrogram.errors import UserNotParticipant
 from dotenv import load_dotenv
 import sqlite3
 from datetime import datetime, timedelta
+from config import API_ID, API_HASH, BOT_TOKEN, ADMIN_ID, CHANNEL_ID
 
 load_dotenv()
-
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_IDS = [int(os.getenv("ADMIN_ID"))]
 
 app = Client("kodlikino_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
@@ -22,183 +18,227 @@ cursor = conn.cursor()
 cursor.execute("""CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
     username TEXT,
-    is_premium INTEGER DEFAULT 0,
-    premium_until TEXT
+    join_date TEXT,
+    last_action TEXT,
+    has_join_request INTEGER DEFAULT 0
 )""")
 
 cursor.execute("""CREATE TABLE IF NOT EXISTS films (
     film_id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT UNIQUE,
-    name TEXT,
-    video_id TEXT,
-    duration INTEGER,
-    size REAL
+    name TEXT
 )""")
 
-cursor.execute("""CREATE TABLE IF NOT EXISTS channels (
-    channel_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    channel_name TEXT UNIQUE
-)""")
-
-cursor.execute("""CREATE TABLE IF NOT EXISTS settings (
-    setting_key TEXT PRIMARY KEY,
-    setting_value TEXT
+cursor.execute("""CREATE TABLE IF NOT EXISTS spam_protection (
+    user_id INTEGER PRIMARY KEY,
+    last_search TEXT,
+    search_count INTEGER DEFAULT 0
 )""")
 
 conn.commit()
 
 movies = {}
-channels = []
-admin_list = ADMIN_IDS.copy()
+SPAM_LIMIT = 5
+SPAM_WINDOW = 60
 
 def is_admin(user_id):
-    return user_id in admin_list
+    return user_id == ADMIN_ID
 
-async def check_subscription(user_id):
-    if not channels:
+async def check_join_request(user_id):
+    try:
+        await app.get_chat_member(CHANNEL_ID, user_id)
         return True
-    for channel in channels:
-        try:
-            await app.get_chat_member(channel, user_id)
-        except UserNotParticipant:
-            return False
-        except:
-            continue
+    except UserNotParticipant:
+        cursor.execute("SELECT has_join_request FROM users WHERE user_id = ?", (user_id,))
+        result = cursor.fetchone()
+        return result and result[0] == 1
+    except:
+        return False
+
+def update_user_action(user_id, action):
+    cursor.execute("UPDATE users SET last_action = ? WHERE user_id = ?", 
+                   (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id))
+    conn.commit()
+
+def check_spam(user_id):
+    cursor.execute("SELECT last_search, search_count FROM spam_protection WHERE user_id = ?", (user_id,))
+    result = cursor.fetchone()
+    
+    if not result:
+        cursor.execute("INSERT INTO spam_protection (user_id, last_search, search_count) VALUES (?, ?, ?)",
+                      (user_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 1))
+        conn.commit()
+        return True
+    
+    last_search, search_count = result
+    last_search_time = datetime.strptime(last_search, "%Y-%m-%d %H:%M:%S")
+    time_diff = (datetime.now() - last_search_time).total_seconds()
+    
+    if time_diff > SPAM_WINDOW:
+        cursor.execute("UPDATE spam_protection SET last_search = ?, search_count = 1 WHERE user_id = ?",
+                      (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id))
+        conn.commit()
+        return True
+    
+    if search_count >= SPAM_LIMIT:
+        return False
+    
+    cursor.execute("UPDATE spam_protection SET search_count = search_count + 1 WHERE user_id = ?", (user_id,))
+    conn.commit()
     return True
+
+def get_main_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎬 Filmlarni qidirish", callback_data="search")],
+        [InlineKeyboardButton("📋 Kanal", url=f"https://t.me/c/{str(CHANNEL_ID)[4:]}")],
+    ])
+
+def get_request_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📨 Zayavka yuborish", callback_data="send_request")],
+        [InlineKeyboardButton("🔄 Tekshirish", callback_data="check_request")],
+    ])
 
 def get_admin_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Statistika", callback_data="stats")],
-        [InlineKeyboardButton("➕ Kanal qo'shish", callback_data="add_channel")],
-        [InlineKeyboardButton("📋 Kanallar", callback_data="show_channels")],
-        [InlineKeyboardButton("🎬 Film qo'shish", callback_data="add_film")],
-        [InlineKeyboardButton("🗑 Film o'chirish", callback_data="delete_film")],
-        [InlineKeyboardButton("👤 Admin qo'shish", callback_data="add_admin")],
+        [InlineKeyboardButton("📊 Statistika", callback_data="admin_stats")],
+        [InlineKeyboardButton("🎬 Film qo'shish", callback_data="admin_add_film")],
+        [InlineKeyboardButton("📋 Filmlar", callback_data="admin_show_films")],
     ])
 
 @app.on_message(filters.command("start") & filters.private)
 async def start(client, message: Message):
     user_id = message.from_user.id
+    username = message.from_user.username or "Unknown"
     
-    cursor.execute("INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)", 
-                   (user_id, message.from_user.username or "Unknown"))
+    cursor.execute("INSERT OR IGNORE INTO users (user_id, username, join_date) VALUES (?, ?, ?)",
+                   (user_id, username, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     conn.commit()
+    update_user_action(user_id, "start")
     
     if is_admin(user_id):
-        await message.reply_text("🎬 **KodliKino Bot Admin Paneli**\n\nAdmin buyruqlarini tanlang:", 
-                                reply_markup=get_admin_keyboard())
+        await message.reply_text("🎬 **Admin Panel**\n\nBuyruqlarni tanlang:", reply_markup=get_admin_keyboard())
+        return
+    
+    has_request = await check_join_request(user_id)
+    
+    if has_request:
+        await message.reply_text("🎬 **KodliKino botiga xush kelibsiz!**\n\n📽 Film kodini yoki nomini qidiring",
+                                reply_markup=get_main_keyboard())
     else:
-        if not await check_subscription(user_id):
-            buttons = []
-            for ch in channels:
-                buttons.append([InlineKeyboardButton(f"📢 {ch}", url=f"https://t.me/{ch}")])
-            buttons.append([InlineKeyboardButton("✅ Tekshirish", callback_data="check_sub")])
-            
-            await message.reply_text("❌ **Botdan foydalanish uchun kanallarga obuna bo'ling:**",
-                                    reply_markup=InlineKeyboardMarkup(buttons))
-        else:
-            await message.reply_text("🎬 **Film kodini kiriting:**")
+        await message.reply_text("❌ **Botdan foydalanish uchun kanalga zayavka yuborishingiz kerak**\n\n"
+                                "Qadamlar:\n"
+                                "1️⃣ Tugmani bosing\n"
+                                "2️⃣ Kanalga qo'shilish so'rovi yuboring\n"
+                                "3️⃣ 'Tekshirish' tugmasini bosing",
+                                reply_markup=get_request_keyboard())
 
-@app.on_message(filters.private & filters.text & ~filters.command("start"))
+@app.on_message(filters.command("search") & filters.private)
+async def search_cmd(client, message: Message):
+    user_id = message.from_user.id
+    
+    if is_admin(user_id):
+        await message.reply_text("🔍 Film nomini yuboring:")
+        return
+    
+    has_request = await check_join_request(user_id)
+    if not has_request:
+        await message.reply_text("❌ Avval kanalga zayavka yuboringiz", reply_markup=get_request_keyboard())
+        return
+    
+    if not check_spam(user_id):
+        await message.reply_text("⏰ Tez-tez qidirma. Biroz kuting!")
+        return
+    
+    await message.reply_text("🔍 Film kodini yuboring:")
+
+@app.on_message(filters.private & filters.text & ~filters.command(["start", "search"]))
 async def handle_text(client, message: Message):
     user_id = message.from_user.id
     text = message.text.strip()
     
     if is_admin(user_id):
-        if text.startswith("kanal:"):
-            channel = text.replace("kanal:", "").strip()
-            channels.append(channel)
-            cursor.execute("INSERT INTO channels (channel_name) VALUES (?)", (channel,))
-            conn.commit()
-            await message.reply_text(f"✅ Kanal qo'shildi: {channel}")
-            
-        elif text.startswith("film:"):
-            parts = text.replace("film:", "").split("|")
-            if len(parts) >= 2:
-                code = parts[0].strip()
-                name = parts[1].strip()
-                movies[code] = {"name": name}
-                cursor.execute("INSERT INTO films (code, name) VALUES (?, ?)", (code, name))
-                conn.commit()
-                await message.reply_text(f"✅ Film qo'shildi:\n📝 Kod: {code}\n🎬 Nomi: {name}")
-            else:
-                await message.reply_text("❌ Format: film:kod|Film Nomi")
-                
-        elif text.startswith("del:"):
-            code = text.replace("del:", "").strip()
-            if code in movies:
-                del movies[code]
-                cursor.execute("DELETE FROM films WHERE code = ?", (code,))
-                conn.commit()
-                await message.reply_text(f"✅ Film o'chirildi: {code}")
-            else:
-                await message.reply_text("❌ Film topilmadi")
+        await message.reply_text(f"📝 Saqlandi: {text}")
+        return
+    
+    has_request = await check_join_request(user_id)
+    if not has_request:
+        await message.reply_text("❌ Botdan foydalanish uchun avval kanalga zayavka yuboringiz",
+                                reply_markup=get_request_keyboard())
+        return
+    
+    if not check_spam(user_id):
+        await message.reply_text("⏰ Tez-tez qidirma. Biroz kuting!")
+        return
+    
+    if text in movies:
+        film = movies[text]
+        await message.reply_text(f"🎬 **{film['name']}**\n\n🔢 Kod: `{text}`")
     else:
-        if not await check_subscription(user_id):
-            await message.reply_text("❌ Avval kanallarga obuna bo'ling")
-            return
-        
-        if text in movies:
-            film = movies[text]
-            await message.reply_text(f"🎬 **{film['name']}**\n\n🔢 Kod: `{text}`")
-        else:
-            await message.reply_text("❌ Film topilmadi")
+        await message.reply_text("❌ Film topilmadi. Boshqa kod yuboning")
 
 @app.on_callback_query()
 async def handle_callback(client, callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
     data = callback_query.data
     
-    if not is_admin(user_id):
-        if data == "check_sub":
-            if await check_subscription(user_id):
-                await callback_query.message.delete()
-                await client.send_message(user_id, "✅ **Obuna tasdiqlandi!**\n\n🎬 Film kodini kiriting")
-            else:
-                await callback_query.answer("❌ Barcha kanallarga obuna bo'ling!", show_alert=True)
-        return
+    if not is_admin(user_id) and data != "send_request" and data != "check_request":
+        has_request = await check_join_request(user_id)
+        if not has_request:
+            await callback_query.answer("❌ Avval kanalga zayavka yuboringiz!", show_alert=True)
+            return
     
-    if data == "stats":
+    if data == "send_request":
+        cursor.execute("UPDATE users SET has_join_request = 1 WHERE user_id = ?", (user_id,))
+        conn.commit()
+        
+        await callback_query.answer("📨 Zayavka yuborildi! Kanalga qo'shilish so'rovi amalga oshadi",
+                                   show_alert=True)
+        await callback_query.message.edit_text("📨 **Zayavka yuborildi!**\n\n"
+                                               "Kanalga qo'shilish so'rovingiz kutilmoqda.\n\n"
+                                               "Tekshirish tugmasini bosing →",
+                                               reply_markup=get_request_keyboard())
+    
+    elif data == "check_request":
+        has_request = await check_join_request(user_id)
+        
+        if has_request:
+            await callback_query.message.delete()
+            await client.send_message(user_id, "✅ **Xush kelibsiz!**\n\n"
+                                             "Endi botdan to'liq foydalanishingiz mumkin",
+                                             reply_markup=get_main_keyboard())
+            await callback_query.answer("✅ Siz kanalga qo'shildingiz!", show_alert=True)
+        else:
+            await callback_query.answer("⏳ Hali kanalga qo'shilmadingiz. Kutib turing...", show_alert=True)
+    
+    elif data == "search":
+        await callback_query.message.edit_text("🔍 Film kodini yuboring:")
+    
+    elif data == "admin_stats":
         cursor.execute("SELECT COUNT(*) FROM users")
         user_count = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM films")
         film_count = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM channels")
-        channel_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM users WHERE has_join_request = 1")
+        request_count = cursor.fetchone()[0]
         
-        msg = f"📊 **Bot Statistikasi**\n\n"
+        msg = f"📊 **Statistika**\n\n"
         msg += f"👥 Foydalanuvchilar: {user_count}\n"
-        msg += f"🎬 Filmlar: {film_count}\n"
-        msg += f"📢 Kanallar: {channel_count}"
+        msg += f"📨 Zayavka: {request_count}\n"
+        msg += f"🎬 Filmlar: {film_count}"
         
         await callback_query.message.edit_text(msg, reply_markup=get_admin_keyboard())
     
-    elif data == "add_channel":
-        await callback_query.message.edit_text("📢 Kanal nomini yuboring (format: kanal:@kanalname)")
+    elif data == "admin_add_film":
+        await callback_query.message.edit_text("🎬 Film kodini yuboring (format: kod|Film Nomi):")
     
-    elif data == "show_channels":
-        msg = "📋 **Majburiy obuna kanallari:**\n\n"
-        if channels:
-            for i, ch in enumerate(channels, 1):
-                msg += f"{i}. {ch}\n"
-        else:
-            msg += "❌ Kanallar qo'shilmagan"
-        await callback_query.message.edit_text(msg, reply_markup=get_admin_keyboard())
-    
-    elif data == "add_film":
-        await callback_query.message.edit_text("🎬 Film qo'shish (format: film:kod|Film Nomi)")
-    
-    elif data == "delete_film":
-        msg = "🎬 **Filmlar ro'yxati:**\n\n"
+    elif data == "admin_show_films":
+        msg = "🎬 **Filmlar:**\n\n"
         if movies:
             for code, film in movies.items():
-                msg += f"📝 Kod: {code}\n🎬 Nomi: {film['name']}\n\n"
-            msg += "O'chirish uchun del:kod yuboring"
+                msg += f"📝 `{code}` - {film['name']}\n"
         else:
-            msg += "❌ Filmlar qo'shilmagan"
-        await callback_query.message.edit_text(msg)
-    
-    elif data == "add_admin":
-        await callback_query.message.edit_text("👤 Admin ID raqamini yuboring")
+            msg += "❌ Film yo'q"
+        await callback_query.message.edit_text(msg, reply_markup=get_admin_keyboard())
 
 app.run()
