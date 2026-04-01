@@ -24,18 +24,36 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", 0))
 
-logger.info(f"API_ID: {API_ID}")
-logger.info(f"BOT_TOKEN: {BOT_TOKEN[:20]}...")
-logger.info(f"ADMIN_ID: {ADMIN_ID}")
-logger.info(f"CHANNEL_ID: {CHANNEL_ID}")
+# Validation
+if not API_ID or API_ID == 0:
+    logger.error("❌ API_ID o'rnatilmagan!")
+    sys.exit(1)
+if not API_HASH:
+    logger.error("❌ API_HASH o'rnatilmagan!")
+    sys.exit(1)
+if not BOT_TOKEN:
+    logger.error("❌ BOT_TOKEN o'rnatilmagan!")
+    sys.exit(1)
+
+logger.info(f"✅ API_ID: {API_ID}")
+logger.info(f"✅ API_HASH: {API_HASH[:10]}...")
+logger.info(f"✅ BOT_TOKEN: {BOT_TOKEN[:20]}...")
+logger.info(f"✅ ADMIN_ID: {ADMIN_ID}")
+logger.info(f"✅ CHANNEL_ID: {CHANNEL_ID}")
 
 # Pyrogram app
-app = Client(
-    "kodlikino_bot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=BOT_TOKEN
-)
+try:
+    app = Client(
+        "kodlikino_bot",
+        api_id=API_ID,
+        api_hash=API_HASH,
+        bot_token=BOT_TOKEN,
+        workdir="."
+    )
+    logger.info("✅ Pyrogram Client yaratildi")
+except Exception as e:
+    logger.error(f"❌ Pyrogram Client xatosi: {e}")
+    sys.exit(1)
 
 # Database
 conn = sqlite3.connect("bot.db", check_same_thread=False)
@@ -62,6 +80,7 @@ cursor.execute("""CREATE TABLE IF NOT EXISTS spam_protection (
 )""")
 
 conn.commit()
+logger.info("✅ Database yaratildi")
 
 movies = {}
 SPAM_LIMIT = 5
@@ -147,7 +166,7 @@ async def start(client, message: Message):
         user_id = message.from_user.id
         username = message.from_user.username or "Unknown"
         
-        logger.info(f"Start: {user_id} - {username}")
+        logger.info(f"✅ Start: {user_id} - {username}")
         
         cursor.execute("INSERT OR IGNORE INTO users (user_id, username, join_date) VALUES (?, ?, ?)",
                        (user_id, username, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
@@ -171,7 +190,7 @@ async def start(client, message: Message):
                                     "3️⃣ 'Tekshirish' tugmasini bosing",
                                     reply_markup=get_request_keyboard())
     except Exception as e:
-        logger.error(f"Start xatosi: {e}")
+        logger.error(f"❌ Start xatosi: {e}")
 
 @app.on_message(filters.command("search") & filters.private)
 async def search_cmd(client, message: Message):
@@ -193,7 +212,7 @@ async def search_cmd(client, message: Message):
         
         await message.reply_text("🔍 Film kodini yuboring:")
     except Exception as e:
-        logger.error(f"Search xatosi: {e}")
+        logger.error(f"❌ Search xatosi: {e}")
 
 @app.on_message(filters.private & filters.text & ~filters.command(["start", "search"]))
 async def handle_text(client, message: Message):
@@ -201,7 +220,7 @@ async def handle_text(client, message: Message):
         user_id = message.from_user.id
         text = message.text.strip()
         
-        logger.info(f"Text: {user_id} - {text}")
+        logger.info(f"✅ Text: {user_id} - {text}")
         
         if is_admin(user_id):
             await message.reply_text(f"📝 Saqlandi: {text}")
@@ -223,7 +242,7 @@ async def handle_text(client, message: Message):
         else:
             await message.reply_text("❌ Film topilmadi. Boshqa kod yuboning")
     except Exception as e:
-        logger.error(f"Handle text xatosi: {e}")
+        logger.error(f"❌ Handle text xatosi: {e}")
 
 @app.on_callback_query()
 async def handle_callback(client, callback_query: CallbackQuery):
@@ -231,7 +250,7 @@ async def handle_callback(client, callback_query: CallbackQuery):
         user_id = callback_query.from_user.id
         data = callback_query.data
         
-        logger.info(f"Callback: {user_id} - {data}")
+        logger.info(f"✅ Callback: {user_id} - {data}")
         
         if not is_admin(user_id) and data != "send_request" and data != "check_request":
             has_request = await check_join_request(user_id)
@@ -290,11 +309,19 @@ async def handle_callback(client, callback_query: CallbackQuery):
             await callback_query.message.edit_text(msg, reply_markup=get_admin_keyboard())
     
     except Exception as e:
-        logger.error(f"Callback xatosi: {e}")
+        logger.error(f"❌ Callback xatosi: {e}")
 
 def main():
-    logger.info("Bot ishga tushmoqda...")
-    app.run()
+    logger.info("🚀 Bot ishga tushmoqda...")
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        logger.info("🛑 Bot to'xtatildi")
+        conn.close()
+    except Exception as e:
+        logger.error(f"❌ Bot xatosi: {e}")
+        conn.close()
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
