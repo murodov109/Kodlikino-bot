@@ -4,13 +4,13 @@ ini_set('display_errors', true);
 
 #================================================
 
-define('API_KEY', '7911010868:AAFLZpyH1MlcpWslCcXrsd_y0dZxWf-SV7o');
+define('API_KEY', '8582629749:AAGGxJdWpE3bp9MIqGvi2J9SqpmoJo9Nci8');
 
-$idbot = 7911010868;
-$userbot = 'KATALAR_FILIM_BOT';
-$umid = 1900651840;
+$idbot = 8582629749;
+$userbot = '';
+$umid = 7617397626;
 $owners = array($umid);
-$user = "Richbolla";
+$user = "murodov_ads";
 
 define('DB_HOST', 'localhost');
 define('DB_USER', 'botirovuz_ozzbek');
