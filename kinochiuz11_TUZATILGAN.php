@@ -7,7 +7,7 @@ ini_set('display_errors', true);
 define('API_KEY', '8582629749:AAGGxJdWpE3bp9MIqGvi2J9SqpmoJo9Nci8');
 
 $idbot = 8582629749;
-$userbot = '';
+$userbot = 'cinematime_uzbot';
 $umid = 7617397626;
 $owners = array($umid);
 $user = "murodov_ads";
